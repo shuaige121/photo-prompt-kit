@@ -39,7 +39,7 @@ The counter Worker also tracks a **shared, cross-device cooldown** so any device
 - `GET /check` → `{safe, in_cooldown, recent_in_window, threshold, window_min, cooldown_remaining_sec, cooldown_until_iso}` (read-only).
 - `POST /gen {device}` → records one generation event into the rolling window; returns the same status.
 
-Tunables (Worker `vars`): `COOLDOWN_THRESHOLD` (default **12**), `COOLDOWN_WINDOW_MIN` (**40**), `COOLDOWN_MIN` (**45**) → ≥12 gens in any 40-min window locks ~45 min, **shared across all devices**.
+**Model:** a pure sliding window — at most **`THRESH` (12)** generations per **`WINDOW_MIN` (45)**-minute window, **shared across all devices**. `cooldown_until` is anchored to the event timestamps (= when the oldest in-excess event ages out of the window), so it counts down monotonically rather than jumping. Tune `THRESH`/`WINDOW_MIN` at the top of `worker/worker.js`. Storage is a single KV key (read-your-write → reads are accurate immediately); the only soft spot is a rare lost event under truly simultaneous writes, which just delays the gate by one event.
 
 `image2.py` wires it automatically: `POST /gen` after every saved image, a **warning at batch start if a shared cooldown is active**, and the gate state in `--usage` (`cooldown gate: clear (N/12 in last 45min)`). Other tools/agents can call `GET /check` directly. Worker source + deploy notes: [`worker/`](worker/).
 
