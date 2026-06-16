@@ -49,7 +49,7 @@ These are the field's two fundamental axes (alignment vs human-preference) — t
 | Control (lens/light/angle) | **~35%** | ~15% |
 | Constraints | ~20% | ~10% |
 
-*(ratios provisional — being calibrated by an ongoing intent×genre experiment.)* One subject < ~110 words either way. Then pick a genre below and compose at your mode's ratio.
+*(ratios are lean defaults — an n=3 study found the effect modest; the big levers are no-render-spam + length sweet-spot + intent-for-scenes. See recipes/MODES.md.)* One subject < ~110 words either way. Then pick a genre below and compose at your mode's ratio.
 
 ## Genres (interface)
 

@@ -18,7 +18,7 @@ The image must **make people feel something**: mood, story, atmosphere.
 - Empirically, Evocative on a lone product yields "expensive emptiness"; Precise Control on a human face yields a clean but soulless headshot. Match the mode to the job.
 
 ## Word budget per mode
-*(provisional ratios — being calibrated by an ongoing intent×genre experiment; the shape is the point, not the exact %.)*
+*(lean defaults, not hard rules — an n=3 study found the ratio effect is modest; the **direction** is the point, not the exact %. See Calibration below.)*
 
 | component | 🎯 Precise Control | 🌫️ Evocative |
 |---|---|---|
@@ -35,3 +35,18 @@ Keep **one subject under ~110 words** in either mode (length sweet-spot; past ~1
 - **Either mode:** never use render-spam — `8k, 4k, masterpiece, hyper-detailed, studio lighting, cinematic, vibrant, stunning, flawless, octane, unreal engine, award-winning`.
 
 Then go to `recipes/<genre>.md`, and compose at the **ratio your mode dictates** — the genre files give the control-layer snippets; in Evocative mode you lead with intent and borrow only one or two control anchors from them.
+
+## Calibration — what an n=3 study actually found (gpt-image-2)
+
+A 45-image study (5 subjects × 3 ratios × 3 reps, blind dual-axis VLM scoring) tempered the theory — **treat the ratios above as a lean, not a law:**
+
+- **The ratio effect is modest** (~0.3–0.7 on a 10-scale). Evocative-leaning beat control-leaning on *preference* only for subjects with a **scene/atmosphere to evoke** (street, food stall: +0.7); for isolated heroes (portrait face, landscape vista, product) all three ratios scored about the same.
+- **Intent is low-risk:** leaning intent did **not** hurt subject-fidelity/adherence (every mode 8.5–9). The earlier "intent backfires on portraits" was a single-axis scoring artifact — separate adherence from preference and it disappears.
+- **The real moderator is "is there a scene/atmosphere to evoke?"** more than raw subject type. Yes → lean Evocative. An isolated object that must be exact → lean Precise Control.
+
+**The three levers that move quality more than the ratio does:**
+1. **Never use render-spam** (`8k, vibrant, studio lighting, masterpiece`) — the only thing that scored 4/10 in any test.
+2. **Stay in the length sweet-spot** (~30–110 words for one subject; past ~150 it dilutes to *generic*, not ugly).
+3. **Lead with intent for scene/emotional shots** — a free ~0.5–0.7 preference lift where it applies, at no adherence cost.
+
+Mode choice is a fine-tune; these three are the dealmakers.
