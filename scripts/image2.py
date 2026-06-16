@@ -405,7 +405,21 @@ def was_silent_refusal(thread_id: str | None) -> bool:
     return False
 
 
+_AUTH_DEAD = False  # set when Codex auth is invalidated, to abort the batch fast (no retry storm)
+
+
+def _is_auth_error(logf) -> bool:
+    try:
+        t = Path(logf).read_text(errors="ignore")
+    except OSError:
+        return False
+    return ("refresh_token_invalidated" in t
+            or ('"invalid_request_error"' in t and "token" in t)
+            or '"code": "unauthorized"' in t)
+
+
 def do_job(job: dict, args) -> dict:
+    global _AUTH_DEAD
     name, spec = job["name"], job["prompt"]
     size = job.get("size", args.size)
     quality = job.get("quality", args.quality)
@@ -424,6 +438,10 @@ def do_job(job: dict, args) -> dict:
         log(f"  ✘ {name}: reference image(s) not found: {', '.join(missing)}")
         return result
 
+    if _AUTH_DEAD:  # a sibling job already saw a dead token — don't pile on more requests
+        result["auth_error"] = True
+        return result
+
     attempts = args.retries + 1
     for attempt in range(1, attempts + 1):
         prompt = build_prompt(spec, size, quality, attempt > 1, refs, ref_mode)
@@ -432,6 +450,12 @@ def do_job(job: dict, args) -> dict:
         log(f"  ▶ {name} (attempt {attempt}/{attempts}{', refs=' + str(len(refs)) if refs else ''}) ...")
         thread_id = run_codex(prompt, args.reasoning, args.timeout, args.codex_bin, logf, refs)
         result["thread_id"] = thread_id
+        if _is_auth_error(logf):
+            _AUTH_DEAD = True
+            result["auth_error"] = True
+            log(f"  ✘ {name}: Codex auth invalidated (refresh_token_invalidated) — run `codex login`. "
+                "Aborting batch, NOT retrying (avoids a request storm that trips the anti-abuse cooldown).")
+            return result
         rl = rate_limits_for_thread(thread_id)
         if rl and rl.get("rate_limit_reached_type"):
             result["throttled"] = True
@@ -563,6 +587,7 @@ def main() -> None:
     bad = [r for r in results if not r["ok"]]
     throttled = any(r.get("throttled") for r in results)
     refused = [r for r in results if r.get("silent_refusal")]
+    auth_dead = [r for r in results if r.get("auth_error")]
     results.sort(key=lambda r: r["name"])
     post = latest_rate_limits()
     counter_report()
@@ -577,6 +602,9 @@ def main() -> None:
     if refused:
         log(f"  ⚠ {len(refused)} job(s) hit the SILENT image_gen cooldown (anti-abuse, invisible in "
             "usage%) — stop generating and retry in 30-60 min; do not burn retries now.")
+    if auth_dead:
+        log(f"  ⛔ {len(auth_dead)} job(s) hit a DEAD Codex token (refresh_token_invalidated) — run "
+            "`codex login` to re-auth, then re-run. Batch was aborted early to avoid a request storm.")
     for r in bad:
         log(f"  FAILED: {r['name']} (thread={r['thread_id']}) — see {args.out_dir}/.logs/")
     print(json.dumps({
@@ -584,6 +612,7 @@ def main() -> None:
         "concurrency": conc, "decision": why,
         "succeeded": len(ok), "failed": len(bad), "throttled": throttled,
         "silent_refusals": len(refused),
+        "auth_errors": len(auth_dead),
         "usage": post, "results": results,
     }, ensure_ascii=False, indent=2))
     sys.exit(0 if not bad else 1)
