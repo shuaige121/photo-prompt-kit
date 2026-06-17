@@ -1,14 +1,12 @@
-// img2-counter — shared cross-device image-gen counter + cooldown gate.
-// Endpoints (all require Bearer AUTH_TOKEN):
-//   POST /gen {device?}              record ONE generation event, return fresh status
-//   GET  /check                      read-only: is it safe to generate now?
-//   POST /report {device,date,count} absolute daily count per device (idempotent)
-//   GET  /day?date / GET /week
-//
-// Cooldown = pure SLIDING WINDOW: at most THRESH generations per WINDOW, shared
-// across all devices. cooldown_until is anchored to the EVENT timestamps (not call
-// time) so it counts down monotonically. Events live in ONE KV key (read-your-write
-// = fast, accurate for the sequential case). Tune THRESH/WINDOW_MIN below.
+// img2-counter — shared cross-device coordinator for image generation.
+//  Counter:  POST /report {device,date,count} · GET /day · GET /week
+//  Cooldown: POST /gen {device} · GET /check         (sliding window, see below)
+//  Lock/state machine (NEW — prevents concurrent codex runs that race the OAuth refresh):
+//    POST /claim     {device, task, ttl?}  -> acquire the single generation lease (who/when/what)
+//    POST /heartbeat {lease_id, ttl?}      -> extend your lease during a long batch
+//    POST /release   {lease_id}            -> give it back
+//    GET  /state                           -> {lease: who/when/what, free, cooldown}
+//  One worker = one source of truth for "who is generating right now + the cooldown".
 const THRESH = 12;
 const WINDOW_MIN = 45;
 const WINDOW_MS = WINDOW_MIN * 60000;
@@ -18,47 +16,105 @@ export default {
     const auth = req.headers.get("authorization") || "";
     if (auth !== `Bearer ${env.AUTH_TOKEN}`) return new Response("unauthorized", { status: 401 });
     const url = new URL(req.url);
+    const now = Date.now();
 
+    // ---------- cooldown (sliding window, event-anchored) ----------
     const getRecent = async () => {
       const raw = await env.KV.get("gen:recent");
-      const cutoff = Date.now() - WINDOW_MS - 600000; // keep window + 10min slack
+      const cutoff = now - WINDOW_MS - 600000;
       return (raw ? JSON.parse(raw) : []).filter((t) => t >= cutoff).sort((a, b) => a - b);
     };
-
-    const status = async () => {
-      const now = Date.now();
+    const cooldownStatus = async () => {
       const win = (await getRecent()).filter((t) => t >= now - WINDOW_MS);
       const n = win.length;
       const hit = n >= THRESH;
-      // count drops below THRESH once win[n-THRESH] ages out of the window:
       const cdUntil = hit ? win[n - THRESH] + WINDOW_MS : 0;
-      const inCooldown = now < cdUntil;
+      const inCd = now < cdUntil;
       return {
-        safe: !inCooldown,
-        in_cooldown: inCooldown,
-        cooldown_until: inCooldown ? cdUntil : 0,
-        cooldown_until_iso: inCooldown ? new Date(cdUntil).toISOString() : null,
-        cooldown_remaining_sec: inCooldown ? Math.ceil((cdUntil - now) / 1000) : 0,
-        recent_in_window: n,
-        threshold: THRESH,
-        window_min: WINDOW_MIN,
-        now,
+        safe: !inCd, in_cooldown: inCd, cooldown_until: inCd ? cdUntil : 0,
+        cooldown_until_iso: inCd ? new Date(cdUntil).toISOString() : null,
+        cooldown_remaining_sec: inCd ? Math.ceil((cdUntil - now) / 1000) : 0,
+        recent_in_window: n, threshold: THRESH, window_min: WINDOW_MIN,
       };
     };
 
+    // ---------- lease / state machine ----------
+    const getLease = async () => {
+      const raw = await env.KV.get("lease");
+      if (!raw) return null;
+      const l = JSON.parse(raw);
+      return now < l.expires_at ? l : null; // expired => free
+    };
+
+    if (req.method === "POST" && url.pathname === "/claim") {
+      const b = await req.json().catch(() => ({}));
+      const device = b.device || "unknown";
+      const task = b.task || "";
+      const ttl = Math.min(Math.max(parseInt(b.ttl || "600", 10), 30), 1800); // 30s..30min
+      const cur = await getLease();
+      if (cur && cur.device !== device) {
+        return Response.json({
+          granted: false, holder: cur.device, task: cur.task, started_at: cur.started_at,
+          expires_at: cur.expires_at, wait_sec: Math.ceil((cur.expires_at - now) / 1000),
+        });
+      }
+      const lease_id = cur && cur.device === device ? cur.lease_id : crypto.randomUUID();
+      const lease = {
+        device, task, lease_id,
+        started_at: cur && cur.device === device ? cur.started_at : now,
+        expires_at: now + ttl * 1000,
+      };
+      await env.KV.put("lease", JSON.stringify(lease), { expirationTtl: ttl + 120 });
+      return Response.json({ granted: true, ...lease });
+    }
+    if (req.method === "POST" && url.pathname === "/heartbeat") {
+      const b = await req.json().catch(() => ({}));
+      const ttl = Math.min(Math.max(parseInt(b.ttl || "600", 10), 30), 1800);
+      const cur = await getLease();
+      if (cur && cur.lease_id === b.lease_id) {
+        cur.expires_at = now + ttl * 1000;
+        await env.KV.put("lease", JSON.stringify(cur), { expirationTtl: ttl + 120 });
+        return Response.json({ ok: true, expires_at: cur.expires_at });
+      }
+      return Response.json({ ok: false, reason: cur ? "lease rotated/held by other" : "no active lease" });
+    }
+    if (req.method === "POST" && url.pathname === "/release") {
+      const b = await req.json().catch(() => ({}));
+      const cur = await getLease();
+      if (cur && cur.lease_id === b.lease_id) {
+        await env.KV.delete("lease");
+        return Response.json({ ok: true });
+      }
+      return Response.json({ ok: false, reason: cur ? "not your lease" : "no active lease" });
+    }
+    if (req.method === "GET" && url.pathname === "/state") {
+      const cur = await getLease();
+      return Response.json({
+        free: !cur,
+        lease: cur ? {
+          device: cur.device, task: cur.task,
+          started_at: cur.started_at, started_iso: new Date(cur.started_at).toISOString(),
+          expires_at: cur.expires_at, age_sec: Math.round((now - cur.started_at) / 1000),
+          remaining_sec: Math.ceil((cur.expires_at - now) / 1000),
+        } : null,
+        cooldown: await cooldownStatus(),
+        now,
+      });
+    }
+
+    // ---------- cooldown endpoints ----------
     if (req.method === "POST" && url.pathname === "/gen") {
       const arr = await getRecent();
-      arr.push(Date.now());
+      arr.push(now);
       await env.KV.put("gen:recent", JSON.stringify(arr), { expirationTtl: 7200 });
-      return Response.json(await status());
+      return Response.json(await cooldownStatus());
     }
-    if (req.method === "GET" && url.pathname === "/check") return Response.json(await status());
+    if (req.method === "GET" && url.pathname === "/check") return Response.json(await cooldownStatus());
 
-    // ---- existing daily counter (unchanged) ----
+    // ---------- daily counter ----------
     if (req.method === "POST" && url.pathname === "/report") {
-      let body;
-      try { body = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
-      const { device, date, count } = body || {};
+      const b = await req.json().catch(() => null);
+      const { device, date, count } = b || {};
       if (!device || !/^\d{4}-\d{2}-\d{2}$/.test(date || "") || typeof count !== "number") {
         return new Response("bad request", { status: 400 });
       }
@@ -66,7 +122,7 @@ export default {
       return Response.json({ ok: true, device, date, count });
     }
     if (req.method === "GET" && url.pathname === "/day") {
-      const date = url.searchParams.get("date") || new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const date = url.searchParams.get("date") || new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10);
       const list = await env.KV.list({ prefix: `c:${date}:` });
       const devices = {}; let total = 0;
       for (const k of list.keys) {
@@ -76,7 +132,7 @@ export default {
       return Response.json({ date, total, devices });
     }
     if (req.method === "GET" && url.pathname === "/week") {
-      const end = url.searchParams.get("end") || new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const end = url.searchParams.get("end") || new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10);
       const endMs = Date.parse(end + "T00:00:00Z");
       const days = {}; let total = 0;
       for (let i = 0; i < 7; i++) {
