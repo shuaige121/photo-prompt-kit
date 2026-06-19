@@ -50,3 +50,22 @@ A 45-image study (5 subjects × 3 ratios × 3 reps, blind dual-axis VLM scoring)
 3. **Lead with intent for scene/emotional shots** — a free ~0.5–0.7 preference lift where it applies, at no adherence cost.
 
 Mode choice is a fine-tune; these three are the dealmakers.
+
+## Calibration II — which *word-component* is worth the spend (exp4, 24-image)
+
+A second blind study (2 subjects: elderly fisherman + glass perfume bottle × 6 single-component additions × 2 reps; 12 rater-sheets; each component scored **against the bare base in the same set by the same rater**, so subject/rep/rater-scale cancel out). Adding ONE component sentence to a bare prompt, mean lift on overall (10-scale):
+
+| add this one sentence | overall | what it actually moves |
+|---|---|---|
+| **① concrete subject specifics** | **+1.32** | lifts *every* axis (realism +1.3, emotion +1.3, technical +1.2) — the universal win |
+| **② emotional intent** | **+0.87** | the resonance specialist: **emotion +1.8**, depth +1.1, light +1.0 — but realism only +0.1 |
+| ③ lens / depth-of-field | +0.33 | small broad lift; cheap insurance |
+| ④ texture / "real skin, grain" | +0.22 | realism +0.6 but **depth −0.4, light −0.7** — flattens the image |
+| ⑤ bare lighting spec ("soft side light from left") | **−0.12** | net-negative; the model already lights competently |
+
+**Word-spend priority (where to put the next 10 words):** ① subject specifics → ② intent → ③ lens → ④ texture (only if realism is the bottleneck) → ⑤ never bother with a standalone technical-lighting sentence.
+
+Three findings that change how you compose:
+1. **Always spend first on concrete subject specifics** — "who/what exactly" (a 70-yr-old weathered face & calloused hands / a faceted bottle, amber liquid, brushed-gold cap) is the single highest-ROI sentence and it raises *all six* quality axes at once. This is mode-independent.
+2. **Intent buys resonance, NOT realism** — it drives emotion (+1.8), and also depth & light, but barely touches realism (+0.1). This is the empirical proof of the two-mode split: want *feeling* → spend on intent (Evocative); want it to *look real/exact* → spend on subject+lens+texture (Precise Control). Don't expect intent to fix an unconvincing render.
+3. **Deliver light through intent, not through a lighting spec** — a technical light sentence alone is net-negative (−0.12), yet intent words raise the *light* axis +1.0. "the stillness of a quiet morning ritual" out-lights "soft diffused side light from the left." So: drop standalone f-stop/key-light lines; let mood/scene imply the light. (Texture words are a double-edged trade — realism up, depth & light down — use sparingly.)
