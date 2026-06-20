@@ -1,0 +1,14 @@
+[Unit]
+Description=image2 R2->NAS puller (Cloudflare R2 staged images -> NAS archive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/img2-puller.env
+ExecStart=/usr/bin/python3 /opt/r2_nas_puller.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

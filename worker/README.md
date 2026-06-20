@@ -16,6 +16,15 @@ A tiny Cloudflare Worker (+ KV) that tracks image-generation counts across devic
 - `POST /release {lease_id}` — give it back
 - `GET  /state` — `{free, lease:{device, task, started_iso, age_sec, remaining_sec}, cooldown}` → **who is generating right now, since when, doing what, + the cooldown**
 
+**Image staging (R2) + audit catalog — transient cloud store, NAS is the durable archive:**
+- `POST /upload {device,thread_id,name,prompt,date,png_b64}` — stash a PNG in R2 (`img/<date>/<device>/<id>.png`) + write a catalog row (`status:staged`). image2.py calls this for each generated image.
+- `GET  /pending ?limit=` — catalog rows still staged in R2 (cursor-paginated), for the NAS puller to fetch.
+- `GET  /img ?key=` — stream a staged PNG from R2 (the puller downloads this).
+- `POST /ack {catKey,r2key,nas_path}` — the NAS confirmed the image is durable → mark the row `archived`+`nas_path` **first**, then delete the R2 object (**delete-after-ack**: a crash never strands a pruned object as `staged`).
+- `GET  /audit ?date=` — the day's catalog: who generated what prompt, how big, and where it lives now (R2 staged → NAS path). This is the **audit library** (which images, not just how many).
+
+See `../puller/` for the NAS-side `r2_nas_puller.py` + its systemd unit.
+
 ## Why the lease
 
 The OAuth refresh token is **rotating/single-use**: if two devices (or two concurrent `codex exec` processes) refresh it at the same time, one wins and the other's token is invalidated (`refresh_token_invalidated`) — which is exactly how a heavy multi-device run can kill auth. The lease makes generation **mutually exclusive across devices**: claim before a batch, others wait, release after. `ttl` (default 600s, 30–1800) auto-expires a crashed holder. `scripts/paced_run.py` uses it.
@@ -28,7 +37,8 @@ A pure sliding window: at most **`THRESH` (12)** generations per **`WINDOW_MIN` 
 
 ```bash
 wrangler kv namespace create IMG2_COUNTER        # 1. make a KV namespace, copy the id
-cp wrangler.toml.example wrangler.toml           # 2. paste the id into kv_namespaces.id
+wrangler r2 bucket create img2-store             # 1b. make the R2 staging bucket (Workers Paid plan)
+cp wrangler.toml.example wrangler.toml           # 2. paste the KV id (R2 binding already in the example)
 wrangler secret put AUTH_TOKEN                    # 3. set the shared bearer token
 wrangler deploy                                   # 4. ship
 ```
